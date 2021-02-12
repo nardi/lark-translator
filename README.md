@@ -63,6 +63,14 @@ The arguments each rule accepts are shaped by the operations used in the grammar
 
 This package also implements this compatibility check, so that it can guarantee that a `Translator` object will always be able to perform requested syntactic translations. However, whether the translations are also semantically correct still has to be checked by the programmer.
 
+### Caveats
+
+It may often be necessary when translating to transform specific strings from one thing into another. For example, if one were translating between English and German, one would like to replace all occurences of "dog" by "Hund". However, all terminals must be equivalent, so how do we accomplish this?
+
+The way to solve this is to define the concept "dog" as a rule instead of a terminal: in the English grammar, put `word_dog: "dog"` and in the German put `word_dog: "Hund"` and the translation will be performed properly. The important distiction here is that terminals *store their contents*, while rules only keep track of their children. As such, a rule such as `word_dog` will simply be stored in the parse tree as `Rule('word_dog', [])`, while an equivalent terminal would be stored as `Token('word_dog', 'dog')` or similar. This means that the English word will be reinserted into the German text if we reconstruct the parse tree using the German grammar, despite "dog" not appearing in the grammar itself. This is a violation of compatibility, but more importantly not what we want. As such, terminals should only be used for things which are taken 'literally', in the sense that they are input from the user and so the grammar cannot account for them (e.g. a person's name, or a number), and that they can be simply copied over when performing translation.
+
+For another example of this kind of translation, see the JSON-to-XML example, where the character `<` is treated as a special case because it opens a tag in XML and therefore must be escaped. This escaping is done by parsing `<` inside a string using a separate rule `left_bracket`, and giving this rule a different expression in the XML grammar.
+
 ### Todo list
 
  - Testing whether terminals are equivalent (criterion 3 for compatibility) currently doesn't happen.
