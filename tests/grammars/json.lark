@@ -1,0 +1,23 @@
+?value: dict
+      | list
+      | string
+      | SIGNED_NUMBER      -> number
+      | "true"             -> true
+      | "false"            -> false
+      | "null"             -> null
+
+list : "[" [value ("," value)*] "]"
+
+dict : "{" [pair ("," pair)*] "}"
+pair : string ":" value
+
+// We treat the left angle bracket differently because it terminates the value in XML.
+string : "\"" (CHARACTERS* left_bracket*)* "\""
+left_bracket : "<"
+
+// Matches any character except unescaped quotes or left bracket <.
+CHARACTERS : /([^"<]|\\\\")+/
+
+%import common.SIGNED_NUMBER
+%import common.WS
+%ignore WS

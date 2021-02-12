@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "lark-translator"
+version = "0.1.0"
+description = ""
+authors = ["Nardi Lam <mail@nardilam.nl>"]
+
+[tool.taskipy.tasks]
+test = "pytest -s tests/"
+
+[tool.poetry.dependencies]
+python = "^3.9"
+lark = "^0.11.1"
+pyformlang = "^0.1.23"
+
+[tool.poetry.dev-dependencies]
+pytest = "^5.2"
+taskipy = "^1.6.0"
+
+[build-system]
+requires = ["poetry-core>=1.0.0"]
+build-backend = "poetry.core.masonry.api"

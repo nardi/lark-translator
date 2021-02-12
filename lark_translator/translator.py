@@ -1,0 +1,166 @@
+from lark import Lark, Transformer, Tree
+from lark.lark import load_grammar, LarkOptions
+from lark.visitors import Discard
+from lark.reconstruct import Reconstructor
+from pyformlang.regular_expression import Regex
+
+default_options = LarkOptions._defaults
+
+# TODO: point out where the grammars are (first) incompatible.
+# Give the rules, and maybe a regex difference too if possible.
+class IncompatibleGrammarsException(Exception):
+    pass
+
+class Translator():
+    def __init__(self, grammars={}, **options):
+        self.options = dict(options)
+
+        self.grammars = set()
+        self.signatures = {}
+        self.parsers = {}
+        self.reconstructors = {}
+
+        for n, f in grammars.items():
+            self.add_grammar(n, f)
+
+    def add_grammar(self, name, file, **options):
+        options = {**default_options, **self.options, **options}
+
+        with open(file, encoding='utf8') as f:
+            grammar = f.read()
+
+        sig = grammar_signature(
+            load_grammar(grammar, name, options["import_paths"], options["keep_all_tokens"])
+        )
+        is_compat = self.is_compatible(sig)
+        if not is_compat:
+            raise IncompatibleGrammarsException()
+        self.signatures[name] = sig
+
+        self.parsers[name] = Lark(grammar, **options)
+        self.reconstructors[name] = Reconstructor(self.parsers[name])
+
+        self.grammars.add(name)
+
+    def is_compatible(self, grammar=None):
+        if not self.signatures:
+            return True
+        sigs = iter(self.signatures.values())
+        first = next(sigs)
+        if grammar:
+            return compatible_grammars(first, grammar)
+        else:
+            return all([compatible_grammars(first, other) for other in sigs])
+
+    def translate(self, text, fromlang, tolang, formatter=None):
+        tree = self.parsers[fromlang].parse(text)
+        return self.reconstructors[tolang].reconstruct(tree, postproc=formatter)
+
+class RemoveLiterals(Transformer):
+    def value(self, args):
+        if hasattr(args[0], "data") and args[0].data == "literal":
+            raise Discard()
+        else:
+            return Tree("value", args)
+
+class QmarkToMaybe(Transformer):
+    def expr(self, args):
+        if (hasattr(args[1], "type")
+            and args[1].type == "OP"
+            and args[1].value == "?"):
+            return Tree("maybe", [args[0]])
+        else:
+            return Tree("expr", args)
+
+class ExtractAliases(Transformer):
+    def __init__(self, extracted={}):
+        self.extracted = extracted
+
+    def alias(self, args):
+        token = args[1]
+        self.extracted[token.value] = Tree("expansions", [args[0]])
+        return token
+
+class LinearizeRuleRegex(Transformer):
+    def value(self, args):
+        return args[0]
+
+    def expr(self, args):
+        return f"( {str(args[0])} ){str(args[1])}"
+
+    def expansion(self, args):
+        return " ".join(map(str, args))
+
+    def expansions(self, args):
+        return " | ".join(map(str, args))
+
+    def maybe(self, args):
+        return f"( ( {' '.join(map(str, args))} ) | $ )"
+
+def minimal_dfa(rx):
+    return Regex(rx).to_epsilon_nfa().minimize()
+
+def regex_equivalent(a, b):
+    if a and b:
+        return minimal_dfa(a).is_equivalent_to(minimal_dfa(b))
+    else:
+        return a == b
+
+# TODO: include regular expressions for terminals.
+def grammar_signature(grammar):
+    """ Generate a 'signature' for a grammar object, which consists of signatures for
+    each rule in the grammar. A signature for a rule is a regular expression
+    (in pyformlang's syntax, using $ as the empty string) which specifies it's
+    "arguments", i.e. the possible combinations of children a rule node can
+    have in the syntax tree.
+    """
+    signatures = {}
+    transformer_1 = (
+        # Literals are removed because these don't appear in the syntax tree.
+        RemoveLiterals()
+        # ? modifiers are changed to maybe, for easier linearization later.
+        * QmarkToMaybe()
+        # Because aliased rules generate different nodes in the syntax tree,
+        # they should be treated as separate rules.
+        * ExtractAliases(signatures)
+    )
+    transformer_2 = (
+        # Linearize each rule from tree form into a regular expression.
+        LinearizeRuleRegex()
+    )
+
+    for rule, _, expansions, options in grammar.rule_defs:
+        signatures[rule] = transformer_1.transform(expansions)
+
+    # Start a new loop, because extracted aliases have been added to
+    # 'signatures' as well.
+    for rule in signatures:
+        signatures[rule] = transformer_2.transform(signatures[rule])
+
+    return signatures
+
+# TODO: check whether reg-expressions for terminals are the same.
+# Their content remains in the parse tree so if they are not the same,
+# unexpected tokens will be produced (i.e. things which the other
+# regex would not match).
+def compatible_grammars(sig1, sig2):
+    """ Check whether two grammars are compatible, i.e. the parse trees
+    generated by one are interpretable as being generated by the other.
+    This is done by comparing their signatures (from 'grammar_signature'),
+    which should be the arguments to the function.
+    """
+    return (
+        sig1.keys() == sig2.keys()
+        and
+        all([regex_equivalent(sig1[rule], sig2[rule]) for rule in sig1.keys()])
+    )
+
+def format_infix_spaces(tokens):
+    yield next(tokens)
+    while True:
+        try:
+            token = next(tokens)
+            yield " "
+            yield token
+        except StopIteration:
+            break
